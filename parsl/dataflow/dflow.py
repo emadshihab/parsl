@@ -192,10 +192,11 @@ class DataFlowKernel(object):
         """
 
         info_to_monitor = ['func_name', 'fn_hash', 'memoize', 'hashsum', 'fail_count', 'status',
-                           'id', 'time_submitted', 'time_returned', 'executor']
+                           'id', 'time_submitted', 'time_returned', 'try_time_returned', 'executor']
 
         task_log_info = {"task_" + k: task_record[k] for k in info_to_monitor}
         task_log_info['run_id'] = self.run_id
+        task_log_info['try_id'] = task_record['try_id']
         task_log_info['timestamp'] = datetime.datetime.now()
         task_log_info['task_status_name'] = task_record['status'].name
         task_log_info['tasks_failed_count'] = self.tasks_failed_count
@@ -261,6 +262,8 @@ class DataFlowKernel(object):
 
         task_record = self.tasks[task_id]
 
+        task_record['try_time_returned'] = datetime.datetime.now()
+
         if not future.done():
             raise ValueError("done callback called, despite future not reporting itself as done")
 
@@ -283,12 +286,34 @@ class DataFlowKernel(object):
                     task_record['app_fu'].set_exception(e)
 
             elif task_record['fail_count'] <= self._config.retries:
+                # record the final state for this try before we mutate for retries
+
+                # status needs setting because otherwise it is still
+                # `launched`, which gives weird state table entries as the
+                # monitoring DB has ghosted-up a `running` state entry that
+                # isn't reflected in the DFK state table - that is, the DFK
+                # state table is not a reflection of the true task state,
+                # which exists in only distributed form. (!)
+                # But as I shift to 'status' representing the DFK state, and
+                # 'try' representing individual execution attempts, that
+                # running timestamp might be better stored only in the try
+                # table?
+                task_record['status'] = States.fail_retryable
+
+                self._send_task_log_info(task_record)
+
+                task_record['try_id'] += 1
                 task_record['status'] = States.pending
+                task_record['time_submitted'] = None
+                task_record['try_time_returned'] = None
+                task_record['fail_history'] = []
+
                 logger.info("Task {} marked for retry".format(task_id))
 
             else:
                 logger.exception("Task {} failed after {} retry attempts".format(task_id,
                                                                                  self._config.retries))
+                task_record['time_returned'] = datetime.datetime.now()
                 task_record['status'] = States.failed
                 self.tasks_failed_count += 1
                 task_record['time_returned'] = datetime.datetime.now()
@@ -306,11 +331,14 @@ class DataFlowKernel(object):
             with task_record['app_fu']._update_lock:
                 task_record['app_fu'].set_result(future.result())
 
+            # record final state for successful execution
+
         if task_record['app_fu'].stdout is not None:
             logger.info("Standard output for task {} available at {}".format(task_id, task_record['app_fu'].stdout))
         if task_record['app_fu'].stderr is not None:
             logger.info("Standard error for task {} available at {}".format(task_id, task_record['app_fu'].stderr))
 
+        # record current state for this task after we're done: maybe a new try, or maybe the old try marked as failed
         self._send_task_log_info(task_record)
 
         # it might be that in the course of the update, we've gone back to being
@@ -471,7 +499,8 @@ class DataFlowKernel(object):
 
         if self.monitoring is not None and self.monitoring.resource_monitoring_enabled:
             wrapper_logging_level = logging.DEBUG if self.monitoring.monitoring_debug else logging.INFO
-            executable = self.monitoring.monitor_wrapper(executable, task_id,
+            try_id = self.tasks[task_id]['fail_count']
+            executable = self.monitoring.monitor_wrapper(executable, try_id, task_id,
                                                          self.monitoring.monitoring_hub_url,
                                                          self.run_id,
                                                          wrapper_logging_level,
@@ -710,9 +739,11 @@ class DataFlowKernel(object):
                     'fail_history': [],
                     'ignore_for_cache': ignore_for_cache,
                     'status': States.unsched,
+                    'try_id': 0,
                     'id': task_id,
                     'time_submitted': None,
                     'time_returned': None,
+                    'try_time_returned': None,
                     'resource_specification': resource_specification}
 
         app_fu = AppFuture(task_def)
