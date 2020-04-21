@@ -55,8 +55,7 @@ class DependencyError(DataFlowException):
         self.task_id = task_id
 
     def __repr__(self):
-        return "Dependency failure for task {} from: {}".format(self.task_id,
-                                                                self.dependent_exceptions)
+        return "Dependency failure for task {}".format(self.task_id)
 
     def __str__(self):
         return self.__repr__()
