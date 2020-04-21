@@ -310,7 +310,7 @@ class DatabaseManager:
                                          messages=[msg])
                             self.workflow_end = True
 
-                    else:                             # TASK_INFO message
+                    elif msg_type.value == MessageType.TASK_INFO.value:
                         task_info_all_messages.append(msg)
                         if msg['task_id'] in inserted_tasks:
                             task_info_update_messages.append(msg)
@@ -322,6 +322,8 @@ class DatabaseManager:
                             if msg['task_id'] in deferred_resource_messages:
                                 reprocessable_first_resource_messages.append(
                                     deferred_resource_messages.pop(msg['task_id']))
+                    else:
+                        raise RuntimeError("Unexpected message type {} received on priority queue".format(msg_type))
 
                 logger.debug(
                     "Updating and inserting TASK_INFO to all tables")
