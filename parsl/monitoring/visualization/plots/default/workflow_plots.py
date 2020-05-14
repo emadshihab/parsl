@@ -56,7 +56,8 @@ def task_gantt_plot(df_task, df_status, time_completed=None):
               'running': 'rgb(0, 0, 255)',
               'dep_fail': 'rgb(255, 128, 255)',
               'failed': 'rgb(200, 0, 0)',
-              'done': 'rgb(0, 200, 0)',
+              'exec_done': 'rgb(0, 200, 0)',
+              'memo_done': 'rgb(64, 200, 64)',
               'fail_retryable': 'rgb(200, 128,128)'
              }
 
